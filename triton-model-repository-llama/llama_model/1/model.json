@@ -1,0 +1,6 @@
+{
+    "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
+    "max_model_len": 4096,
+    "gpu_memory_utilization": 0.90,
+    "disable_log_stats": true
+}

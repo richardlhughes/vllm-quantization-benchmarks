@@ -1,0 +1,7 @@
+{
+    "model": "facebook/opt-125m",
+    "quantization": "fp8",
+    "gpu_memory_utilization": 0.3,
+    "enforce_eager": true,
+    "disable_log_stats": true
+}

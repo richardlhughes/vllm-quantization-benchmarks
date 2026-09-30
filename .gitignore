@@ -1,0 +1,4 @@
+.env
+grafana-data/
+.claude/
+*:Zone.Identifier
