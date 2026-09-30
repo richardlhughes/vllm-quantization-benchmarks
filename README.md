@@ -41,6 +41,7 @@ grafana/                       # dashboard/datasource provisioning (not yet wire
 grafana.json                   # vLLM's official Grafana dashboard export
 grafana-triton-dashboard.json  # community Triton Grafana dashboard (grafana.com #18737)
 mlflow-data/mlflow.db          # all benchmark run data logged this session
+charts/                        # static PNG exports of the key MLflow comparisons (see Findings)
 ```
 
 `.env` (not included — see `.gitignore`) holds `HF_TOKEN` for gated model
@@ -79,22 +80,35 @@ the card's total capacity outright. Quantization here is the difference
 between running and not running, not an optimization on top of a working
 setup.
 
-**2. FP8 (W8A8, dynamic on-the-fly) vs. AWQ (W4A16, Marlin kernel) trade off
-very differently with batch size.** At batch size 1, AWQ/Marlin dramatically
-outperforms on-the-fly FP8 on this GPU — but a large chunk of the *first*
-measurement of this gap turned out to be a host-RAM/swap artifact on a
-resource-constrained WSL2 box (7.8GB RAM), not a property of the fp8 kernel:
-after the box's RAM was increased to 31GB, the same fp8 config's single-stream
-throughput improved 10x. The batch-size-scaling story is real (fp8 gains far
-more from concurrency=8 than AWQ, which was already closer to its ceiling at
-batch=1) — but it's a smaller effect than the initial numbers suggested, and
-disentangling "real kernel behavior" from "environment noise" took a second
-pass with actual GPU-utilization sampling and a controlled re-run.
+**2. A measurement artifact can fully invert a quantization comparison —
+which is exactly what happened here.** The first pass measured on-the-fly FP8
+(Llama-3.1-8B) at batch size 1 as ~9x slower than AWQ/Marlin (Qwen2.5-14B), and
+concluded FP8's kernel was intrinsically inefficient at low batch sizes. That
+conclusion does not survive a controlled re-test. The box was running with
+7.8GB of system RAM and swapping under load; once RAM was increased to 31GB,
+the *identical* FP8 config reached ~62 tok/s at batch size 1 — slightly
+*ahead* of AWQ's ~52 tok/s, on a smaller model no less — and at concurrency=8
+the two are statistically the same (~426 vs. ~428 tok/s):
+
+![FP8 vs AWQ throughput, before and after the RAM fix](charts/quantization_throughput_scaling.png)
+
+The real lesson isn't about FP8-vs-AWQ kernel design at all: it's that a
+resource-starved host can produce a completely convincing, internally
+consistent, *wrong* story about GPU kernel behavior, and the only way to catch
+it is to independently verify the environment (GPU utilization, host memory,
+swap activity) rather than trust that a repeatable benchmark number reflects
+the thing you think it's measuring. (Model size — 8B vs. 14B — still confounds
+a fully clean FP8-vs-AWQ comparison here, so no strong claim about the
+*methods themselves* should be drawn beyond "comparable, on this hardware.")
 
 **3. CUDA graphs matter more than expected for decode.** Disabling them
 (`--enforce-eager`) made the same FP8 config slower at every concurrency level
 tested — decode issues many small sequential kernel launches per token, and
-graph capture collapses that dispatch overhead into one replay.
+graph capture collapses that dispatch overhead into one replay. (Captured in
+one controlled session, pre-RAM-increase — valid as a relative A/B, not
+comparable in absolute terms to the chart above.)
+
+![CUDA graphs vs eager mode, Llama-3.1-8B FP8](charts/cuda_graphs_vs_eager.png)
 
 **4. Triton's vLLM backend has real, current rough edges** (found and fixed
 live, on Triton 25.05 / bundled vLLM 0.8.4):
@@ -130,7 +144,13 @@ magnitude. The honest conclusion: a serving-layer overhead comparison is only
 valid if the underlying engine version and kernel path are held constant on
 both sides — which isn't possible when one side is Triton's bundled version
 and the other is a fresh mainline install, without building a custom Triton
-image.
+image. The one comparison small enough to be illustrative rather than
+misleading (`facebook/opt-125m`, no quantization-kernel confound) still shows
+a real gap worth expecting — mostly protocol overhead plus the lazy
+graph-capture behavior from finding #4 — but even this mixes engine version
+with serving layer, so treat the magnitude as directional, not definitive:
+
+![opt-125m throughput: direct vLLM vs through Triton](charts/opt125m_triton_vs_direct.png)
 
 ## Hardware / environment
 
